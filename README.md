@@ -12,7 +12,7 @@ Run the following command in backend folder
 docker-compose up --build
 ```
 
-The database can be accessed from ``http://localhost:6333/dashboard#/collections```
+The database can be accessed from ``http://localhost:6333/dashboard#/collections``
 
 ## Frontend Setup
 

@@ -16,6 +16,13 @@ docker-compose up --build
 
 (optional) Monitor the vector database at http://localhost:6333/dashboard.
 
+## Tests
+
+An integration test suite is provided in ``src/integration_test`` folder. It automates the verification of file uploads, listing, searching, and deletion.
+
+Run tests by running the ``test_api.py``
+PS! Make sure the backend is running via docker for testing.
+
 ## API routes
 
 ``/embeddings`` ``GET``   Lists all stored file metadata.
@@ -26,12 +33,6 @@ docker-compose up --build
 ``/embeddings/{id}`` ``DELETE`` Deletes a specific embedding by its ID.
 
 ``/embeddings`` ``DELETE`` Wipes the entire database collection.
-
-## Tests
-
-An integration test suite is provided in ``src/integration_test`` folder. It automates the verification of file uploads, listing, searching, and deletion.
-
-Run tests by running the ``test_api.py``
 
 ## Extra
 

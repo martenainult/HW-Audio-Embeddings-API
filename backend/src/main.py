@@ -7,6 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, PointIdsList
 from .audio_processor import compute_embedding
+from fastapi.middleware.cors import CORSMiddleware
 
 # --- Configuration from Environment Variables ---
 QDRANT_HOST = os.getenv("QDRANT_HOST")
@@ -33,10 +34,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("FRONTEND_URL", "http://localhost:5173")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 def get_file_id_by_name(filename: str) -> str:
     """Generates a deterministic UUID based ONLY on the filename."""
     # uuid5 creates a consistent UUID for the same string input
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, filename))
+
+# @app.get("/healthz")
+# async def health_check():
+#     try:
+#         # Try a lightweight operation on Qdrant
+#         qdrant.get_collections()
+#         return {"status": "ok", "database": "connected"}
+#     except Exception as e:
+#         # Returning a non-200 status code tells Docker the service is NOT healthy
+#         raise HTTPException(status_code=503, detail="Database connection failed")
 
 @app.get("/embeddings")
 async def list_embeddings():
@@ -104,60 +123,86 @@ async def create_embeddings(files: list[UploadFile] = File(...)):
     return results
 
 @app.post("/search")
-async def search_audio(
-    file: UploadFile = File(...), 
-    top_k: int = Form(5)
-):
+async def search_audio(file: UploadFile = File(...), top_k: int = Form(5)):
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    # This offloads the heavy YAMNet math to a background thread
+    query_vector = await run_in_threadpool(compute_embedding, content, file.filename)
     
+    search_result = qdrant.search(
+        collection_name=COLLECTION_NAME,
+        query_vector=query_vector,
+        limit=top_k
+    )
+    
+    return [
+        {
+            "filename": hit.payload["filename"],
+            "similarity_score": hit.score, # Qdrant score
+            "id": hit.id
+        }
+        for hit in search_result
+    ]
+    
+@app.post("/search-by-id/{file_id}")
+async def search_by_id(file_id: str, top_k: int = 5):
+    """Requirement: Search stored embeddings for similar files using an existing ID."""
     try:
-        query_vector = await run_in_threadpool(compute_embedding, content, file.filename)
+        # 1. Retrieve the vector for the existing file from Qdrant
+        points = qdrant.retrieve(
+            collection_name=COLLECTION_NAME,
+            ids=[file_id],
+            with_vectors=True
+        )
         
+        if not points:
+            raise HTTPException(status_code=404, detail="Original file vector not found")
+            
+        query_vector = points[0].vector
+        
+        # 2. Perform the similarity search
         search_result = qdrant.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_vector,
-            limit=top_k
+            limit=top_k + 1  # Get one extra to account for the file itself
         )
         
+        # 3. Filter out the original file from the results and return
         return [
             {
                 "filename": hit.payload["filename"],
                 "similarity_score": hit.score,
                 "id": hit.id
             }
-            for hit in search_result
-        ]
+            for hit in search_result if hit.id != file_id
+        ][:top_k]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
 
 @app.delete("/embeddings/{file_id}")
 async def delete_embedding(file_id: str):
-    """Deletes a specific audio embedding by its ID."""
+    """Deletes a specific audio embedding by its deterministic ID."""
     try:
-        # We use the point ID (the hash-based UUID) to remove the record
-        result = qdrant.delete(
+        qdrant.delete(
             collection_name=COLLECTION_NAME,
-            points_selector=PointIdsList(
-                points=[file_id]
-            )
+            points_selector=PointIdsList(points=[file_id])
         )
-        return {"status": "success", "message": f"Deleted ID {file_id}\n"}
-    
+        return {"status": "success", "message": f"Deleted {file_id}"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/embeddings")
 async def delete_all_embeddings():
-    """Wipes the entire collection (Dangerous/Internal use)."""
+    """Wipes the collection and recreates it."""
     try:
-        # Re-creating the collection is the fastest way to "delete all" in Qdrant
         qdrant.delete_collection(collection_name=COLLECTION_NAME)
         qdrant.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
-        return {"status": "success", "message": "All embeddings deleted and collection reset"}
+        return {"status": "success", "message": "Database cleared"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Wipe failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

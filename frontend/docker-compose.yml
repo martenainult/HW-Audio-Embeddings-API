@@ -1,0 +1,18 @@
+services:
+  frontend:
+    image: node:20-slim
+    container_name: audio-api-frontend
+    working_dir: /app
+    volumes:
+      - .:/app
+      # This anonymous volume prevents your local node_modules
+      # from overriding the container's linux-specific ones
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    # Added --host and --polling for WSL/Windows file sync reliability
+    command: >
+      sh -c "npm install && npm run dev -- --host"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    restart: unless-stopped

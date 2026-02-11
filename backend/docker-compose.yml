@@ -1,0 +1,32 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: audio-api-backend
+    ports:
+      - "${API_PORT}:${API_PORT}"
+    env_file:
+      - .env
+    # depends_on:
+    #   qdrant:
+    #     condition: service_healthy # Wait for Qdrant to actually be ready
+    volumes:
+      - ./src:/app/src
+    restart: always # Restart automatically if the YAMNet process crashes
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: audio-vector-db
+    ports:
+      - "${QDRANT_PORT}:${QDRANT_PORT}"
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+    # Healthcheck ensures the API doesn't start until the DB is responding
+    # Disabled for now since it can cause issues in some environments, but ideally we'd want this
+
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+    #   interval: 5s
+    #   timeout: 5s
+    #   retries: 5

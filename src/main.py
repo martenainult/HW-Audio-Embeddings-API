@@ -1,27 +1,40 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+import uuid
 from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi.concurrency import run_in_threadpool
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-import uuid
 from .audio_processor import compute_embedding
 
-# Configuration
+# --- Configuration ---
 QDRANT_HOST = "qdrant"
 QDRANT_PORT = 6333
 COLLECTION_NAME = "audio_embeddings"
-VECTOR_SIZE = 1024  # YAMNet output size
+VECTOR_SIZE = 1024
 
-# Database Client
+# --- Database Setup ---
 qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Ensure the vector collection exists
-    if not qdrant.collection_exists(COLLECTION_NAME):
-        qdrant.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
-        )
+    # Fix: We use get_collections() which works on all client versions
+    try:
+        existing_collections = qdrant.get_collections().collections
+        exists = any(c.name == COLLECTION_NAME for c in existing_collections)
+        
+        if not exists:
+            print(f"Creating collection: {COLLECTION_NAME}")
+            qdrant.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+            )
+        else:
+            print(f"Collection {COLLECTION_NAME} already exists.")
+            
+    except Exception as e:
+        print(f"Database initialization warning: {e}")
+        
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -31,13 +44,15 @@ async def create_embeddings(files: list[UploadFile] = File(...)):
     results = {}
     
     for file in files:
+        # 1. Read file (IO bound - keep async)
         content = await file.read()
+        
         try:
-            # 1. Generate Vector
-            vector = compute_embedding(content, file.filename)
+            # 2. Process Audio (CPU bound - move to threadpool!)
+            # This prevents the server from freezing while calculating vectors
+            vector = await run_in_threadpool(compute_embedding, content, file.filename)
             
-            # 2. Store in Qdrant
-            # We use the filename as the payload, and a UUID as the point ID
+            # 3. Store in DB
             point_id = str(uuid.uuid4())
             qdrant.upsert(
                 collection_name=COLLECTION_NAME,
@@ -63,25 +78,24 @@ async def search_audio(
     content = await file.read()
     
     try:
-        # 1. Generate Vector for the query audio
-        query_vector = compute_embedding(content, file.filename)
+        # Calculate vector in a thread
+        query_vector = await run_in_threadpool(compute_embedding, content, file.filename)
         
-        # 2. Search Qdrant
+        # Search DB
         search_result = qdrant.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_vector,
             limit=top_k
         )
         
-        # 3. Format Response
-        response = []
-        for hit in search_result:
-            response.append({
+        # Format results
+        return [
+            {
                 "filename": hit.payload["filename"],
-                "similarity_score": hit.score  # Cosine similarity (0 to 1)
-            })
-            
-        return response
+                "similarity_score": hit.score
+            }
+            for hit in search_result
+        ]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

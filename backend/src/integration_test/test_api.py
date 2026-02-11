@@ -29,6 +29,37 @@ def test_upload_all_in_folder():
         for f in opened_files:
             f.close()
 
+def test_invalid_file_rejection():
+    """
+    Test Case: Verifies that uploading a non-audio file results in an error 
+    status rather than a server crash.
+    """
+    print("\n--- Testing Security: Invalid File Rejection ---")
+    url = f"{API_URL}/embeddings"
+    
+    # Create a fake 'audio' file that is actually just text
+    fake_audio_content = b"This is not audio data, it is just a text string."
+    files = [
+        ('files', ('malicious_fake.wav', fake_audio_content, 'audio/wav'))
+    ]
+    
+    try:
+        response = requests.post(url, files=files)
+        data = response.json()
+        
+        # We expect a 200 OK because the API processes the list, 
+        # but the specific file result should be 'error'
+        file_result = data.get('malicious_fake.wav', {})
+        
+        if file_result.get('status') == 'error':
+            print("[✓] PASSED: API correctly identified and rejected invalid audio data.")
+            print(f"    Error Message: {file_result.get('message')}")
+        else:
+            print("[✗] FAILED: API should have returned an error status for invalid data.")
+            
+    except Exception as e:
+        print(f"[✗] FAILED: The server likely crashed or timed out: {e}")
+
 def test_list_all_files():
     """New Method: Fetches and prints the first 25 records from the DB."""
     print("\n--- 2. Listing Collection Contents ---")
@@ -174,6 +205,7 @@ def test_delete_sequence():
 if __name__ == "__main__":
     #test_upload_all_in_folder()
     test_multiple_audio_files_upload()
+    test_invalid_file_rejection()
     test_list_all_files()
     test_search_with_first_found()
     test_search_result_with_duplicate()

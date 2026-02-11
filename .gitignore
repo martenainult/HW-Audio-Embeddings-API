@@ -141,7 +141,9 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+#.env # DISABLED FOR THIS PROJECT - ENV FILES MAY CONTAIN SENSITIVE INFO, BUT NOT TODAY
+# Secrets should be stored in a better manner anyway ;)
+
 .envrc
 .venv
 env/

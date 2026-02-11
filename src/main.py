@@ -1,3 +1,4 @@
+import os
 import uuid
 import hashlib
 from contextlib import asynccontextmanager
@@ -7,24 +8,21 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, PointIdsList
 from .audio_processor import compute_embedding
 
-# --- Configuration ---
-QDRANT_HOST = "qdrant"
-QDRANT_PORT = 6333
-COLLECTION_NAME = "audio_embeddings"
-VECTOR_SIZE = 1024
+# --- Configuration from Environment Variables ---
+QDRANT_HOST = os.getenv("QDRANT_HOST")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT"))
+COLLECTION_NAME = os.getenv("COLLECTION_NAME")
+VECTOR_SIZE = int(os.getenv("VECTOR_SIZE"))
 
-# --- Database Setup ---
+# Database Setup
 qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Robust startup check (works on all client versions)
     try:
         existing_collections = qdrant.get_collections().collections
         exists = any(c.name == COLLECTION_NAME for c in existing_collections)
-        
         if not exists:
-            print(f"Creating collection: {COLLECTION_NAME}")
             qdrant.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
@@ -35,12 +33,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-def get_file_id(content: bytes) -> str:
-    """Generates a deterministic UUID based on file content hash."""
-    file_hash = hashlib.sha256(content).hexdigest()
-    # Create a UUID based on the hash (Namespace DNS is just a standard placeholder)
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, file_hash))
-
+def get_file_id_by_name(filename: str) -> str:
+    """Generates a deterministic UUID based ONLY on the filename."""
+    # uuid5 creates a consistent UUID for the same string input
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, filename))
 
 @app.get("/embeddings")
 async def list_embeddings():
@@ -67,32 +63,26 @@ async def create_embeddings(files: list[UploadFile] = File(...)):
     results = {}
     
     for file in files:
-        content = await file.read()
+        # 1. Generate ID from filename only
+        point_id = get_file_id_by_name(file.filename)
         
-        # 1. Generate ID from content
-        # If the file is identical, this ID will be identical.
-        point_id = get_file_id(content)
-        
-        # 2. Check for Duplicates (Fast Check)
-        # We ask Qdrant if this ID exists.
+        # 2. Check if this filename ID already exists in Qdrant
         existing_points = qdrant.retrieve(
             collection_name=COLLECTION_NAME,
             ids=[point_id]
         )
         
         if existing_points:
-            # SKIP PROCESSING
-            print(f"Skipping {file.filename} (Duplicate)")
             results[file.filename] = {
                 "status": "skipped", 
-                "message": "Duplicate file detected",
+                "message": f"File with name '{file.filename}' already exists in database",
                 "id": point_id
             }
             continue
 
         try:
-            # 3. Process Audio (Heavy Lifting)
-            print(f"Processing new file: {file.filename}")
+            content = await file.read()
+            # 3. Process Audio
             vector = await run_in_threadpool(compute_embedding, content, file.filename)
             
             # 4. Store in DB
@@ -100,7 +90,7 @@ async def create_embeddings(files: list[UploadFile] = File(...)):
                 collection_name=COLLECTION_NAME,
                 points=[
                     PointStruct(
-                        id=point_id,  # Use the hash-based ID
+                        id=point_id, 
                         vector=vector,
                         payload={"filename": file.filename}
                     )
@@ -153,7 +143,8 @@ async def delete_embedding(file_id: str):
                 points=[file_id]
             )
         )
-        return {"status": "success", "message": f"Deleted ID {file_id}"}
+        return {"status": "success", "message": f"Deleted ID {file_id}\n"}
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 

@@ -33,3 +33,5 @@ Access the UI: Open your browser to http://localhost:5173.
 ## Usage
 
 There are already some test files prepared, but you are welcome to test and break the site :)
+
+PS! Don't be shocked to see an empty database after tests as the last step is testing deletion requests.

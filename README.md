@@ -1,5 +1,7 @@
 # HW-Audio-Embeddings-API
 
+Welcome to the bonus section. Here we have a nice interface, added tests and separated docker environments for smooth development.
+
 ## Backend Setup
 
 * **Navigate to the backend folder.** This service handles audio processing via YAMNet and stores vectors in **Qdrant**.
